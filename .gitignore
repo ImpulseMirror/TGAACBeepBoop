@@ -1,0 +1,7 @@
+__pycache__/
+*.py[cod]
+.DS_Store
+*.bak
+.tgaac_text_beep_backup/
+dist/
+*.zip
