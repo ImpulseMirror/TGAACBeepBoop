@@ -1,25 +1,28 @@
 #!/usr/bin/env python3
 """
-TGAAC text-beep volume patcher
+TGAAC text SFX volume patcher (beep + advance click)
 
 Drop this folder into your TGAAC install (next to TGAAC.exe), then run:
-  Linux/macOS:  ./set-text-beep-volume.sh
-  Windows:      set-text-beep-volume.bat
+  python set-text-beep-volume.py
 
-Scales only dialogue typewriter beeps (message_male / message_female).
-Volume is always applied from a one-time backup (not cumulative).
-100% / --restore = exact originals.
+Independent controls:
+  beep     — dialogue typewriter beeps (message_male / message_female)
+  advance  — text-box advance click (chin)
+
+Volumes always re-apply from a one-time backup (not cumulative).
+100% = original sample. 0% = mute.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import struct
 import sys
 import zlib
 from pathlib import Path
-from typing import List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 ARC_MAGIC = b"ARC\x00"
 ENTRY_STRIDE = 144
@@ -27,10 +30,17 @@ PATH_LEN = 0x80
 DATA_ALIGN = 0x8000
 USIZE_FLAG = 0x40000000
 
-TARGET_NAMES = (
-    "message_male",
-    "message_female",
-)
+# Independent volume channels → sample stem names inside snd_script_*.arc
+CHANNELS: Dict[str, Tuple[str, ...]] = {
+    "beep": ("message_male", "message_female"),
+    "advance": ("chin",),
+}
+CHANNEL_LABELS = {
+    "beep": "text beep (typewriter)",
+    "advance": "text advance click",
+}
+DEFAULT_SETTINGS: Dict[str, float] = {name: 100.0 for name in CHANNELS}
+SETTINGS_FILE = "settings.json"
 
 ADAPTATION = [
     230, 230, 230, 230, 307, 409, 512, 614,
@@ -324,7 +334,7 @@ def build_arc(header8: bytes, entries: Sequence[ArcEntry]) -> bytes:
 
 
 # ---------------------------------------------------------------------------
-# Game discovery / backups
+# Game discovery / backups / settings
 # ---------------------------------------------------------------------------
 
 def candidate_game_dirs() -> List[Path]:
@@ -334,7 +344,6 @@ def candidate_game_dirs() -> List[Path]:
     if env:
         cands.append(Path(env))
 
-    # Drop-in: this script lives inside TGAAC or TGAAC/<folder>
     here = script_dir()
     cands.extend([here, here.parent, Path.cwd(), Path.cwd().parent])
 
@@ -390,7 +399,6 @@ def find_game_dir(explicit: Optional[Path]) -> Path:
             raise PatchError(f"--game-dir does not look like TGAAC: {p}")
         return p
 
-    # Prefer drop-in location first
     here = script_dir()
     for cand in (here, here.parent):
         if looks_like_tgaac(cand):
@@ -424,6 +432,46 @@ def backup_dir_for(game_dir: Path) -> Path:
     return game_dir / "nativeDX11x64" / "archive" / ".tgaac_text_beep_backup"
 
 
+def settings_path(bdir: Path) -> Path:
+    return bdir / SETTINGS_FILE
+
+
+def load_settings(bdir: Path) -> Dict[str, float]:
+    path = settings_path(bdir)
+    settings = dict(DEFAULT_SETTINGS)
+    if not path.is_file():
+        return settings
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return settings
+    for key in CHANNELS:
+        if key in data:
+            try:
+                val = float(data[key])
+            except (TypeError, ValueError):
+                continue
+            if 0.0 <= val <= 100.0:
+                settings[key] = val
+    # migrate legacy single-volume key
+    if "volume" in data and "beep" not in data:
+        try:
+            val = float(data["volume"])
+            if 0.0 <= val <= 100.0:
+                settings["beep"] = val
+        except (TypeError, ValueError):
+            pass
+    return settings
+
+
+def save_settings(bdir: Path, settings: Dict[str, float], dry_run: bool) -> None:
+    if dry_run:
+        return
+    bdir.mkdir(parents=True, exist_ok=True)
+    payload = {k: float(settings[k]) for k in CHANNELS}
+    settings_path(bdir).write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
 def ensure_backups(arcs: Sequence[Path], bdir: Path, dry_run: bool) -> None:
     if dry_run:
         return
@@ -446,30 +494,56 @@ def restore_from_backup(arcs: Sequence[Path], bdir: Path, dry_run: bool) -> None
             arc.write_bytes(src.read_bytes())
 
 
+def channel_for_sample(name: str) -> Optional[str]:
+    for channel, names in CHANNELS.items():
+        if name in names:
+            return channel
+    return None
+
+
 def patch_one_from_backup(
     arc: Path,
     backup: Path,
-    volume_pct: float,
+    settings: Dict[str, float],
     dry_run: bool,
 ) -> None:
     header8, _version, entries = read_arc(backup)
-    hits = 0
+    hits = {channel: 0 for channel in CHANNELS}
     for ent in entries:
-        if ent.name not in TARGET_NAMES:
+        channel = channel_for_sample(ent.name)
+        if channel is None:
             continue
+        vol = settings[channel]
         raw = zlib.decompress(ent.blob)
-        patched = adjust_wave_volume(raw, volume_pct)
+        patched = adjust_wave_volume(raw, vol)
         new_blob = zlib.compress(patched, 9)
         flag = ent.usize_field & 0xFF000000 or USIZE_FLAG
         ent.blob = new_blob
         ent.csize = len(new_blob)
         ent.usize_field = flag | (len(patched) & 0x00FFFFFF)
-        hits += 1
+        hits[channel] += 1
         print(
-            f"  {arc.parent.name}/{arc.name}: {ent.name} -> {volume_pct:g}%"
+            f"  {arc.parent.name}/{arc.name}: {ent.name} "
+            f"[{channel}] -> {vol:g}%"
         )
-    if hits != 2:
-        raise PatchError(f"{backup}: expected 2 message_* entries, found {hits}")
+
+    for channel, names in CHANNELS.items():
+        expected = len(names)
+        if hits[channel] != expected:
+            raise PatchError(
+                f"{backup}: expected {expected} {channel} sample(s) "
+                f"{names}, found {hits[channel]}"
+            )
+
+    # All default → write exact backup bytes
+    if all(settings[c] >= 100.0 for c in CHANNELS):
+        if dry_run:
+            print(f"  dry-run: would restore original {arc.name}")
+            return
+        arc.write_bytes(backup.read_bytes())
+        print(f"  restored original {arc.parent.name}/{arc.name}")
+        return
+
     out = build_arc(header8, entries)
     if dry_run:
         print(f"  dry-run: would write {len(out)} bytes")
@@ -478,96 +552,166 @@ def patch_one_from_backup(
     print(f"  wrote {arc.parent.name}/{arc.name}")
 
 
-def prompt_volume() -> float:
-    print()
-    print("TGAAC text-beep volume")
-    print("  100 = default (unchanged)")
-    print("    0 = mute")
-    print("  1-99 = quieter beeps")
-    print("  restore = undo patch from backup")
-    print()
+def _parse_pct(raw: str) -> float:
+    val = float(str(raw).rstrip("%"))
+    if not (0.0 <= val <= 100.0):
+        raise ValueError("out of range")
+    return val
+
+
+def prompt_pct(label: str, current: float) -> float:
     while True:
         try:
-            raw = input("Volume percent [0-100] or 'restore': ").strip().lower()
+            raw = input(f"{label} [{current:g}]: ").strip().lower()
         except EOFError:
             raise PatchError("no volume provided") from None
+        if raw == "":
+            return current
         if raw in ("restore", "r", "undo"):
-            return -1.0
+            return 100.0
         try:
-            val = float(raw.rstrip("%"))
+            return _parse_pct(raw)
         except ValueError:
-            print("  enter a number 0-100, or 'restore'")
-            continue
-        if 0.0 <= val <= 100.0:
-            return val
-        print("  must be between 0 and 100")
+            print("  enter a number 0-100 (blank keeps current)")
+
+
+def prompt_settings(current: Dict[str, float]) -> Tuple[str, Dict[str, float]]:
+    print()
+    print("TGAAC text SFX volumes (independent)")
+    print("  beep     = typewriter beeps while text appears")
+    print("  advance  = click when advancing the text box")
+    print("  100 = default, 0 = mute, blank = keep current")
+    print("  'restore' at any prompt = reset both to 100")
+    print()
+    try:
+        first = input(
+            f"Text beep % [{current['beep']:g}] (or 'restore' / Enter): "
+        ).strip().lower()
+    except EOFError:
+        raise PatchError("no volume provided") from None
+    if first in ("restore", "r", "undo"):
+        return "restore", dict(DEFAULT_SETTINGS)
+    settings = dict(current)
+    if first != "":
+        try:
+            settings["beep"] = _parse_pct(first)
+        except ValueError as exc:
+            raise PatchError("invalid beep volume") from exc
+    settings["advance"] = prompt_pct(
+        f"Text advance click %", settings["advance"]
+    )
+    return "apply", settings
 
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="Set TGAAC dialogue text-beep volume (0–100%). "
-        "Drop this folder into TGAAC and run the .sh / .bat launcher."
+        description="Set TGAAC text-beep and text-advance volumes independently (0–100%)."
     )
     p.add_argument(
         "volume_positional",
         nargs="?",
         default=None,
-        help="volume 0-100, or 'restore' (optional; prompts if omitted)",
+        help="legacy: set beep volume 0-100, or 'restore'",
     )
-    p.add_argument("--volume", type=float, metavar="PCT", help="volume percent 0-100")
+    p.add_argument(
+        "--beep",
+        type=float,
+        metavar="PCT",
+        help="typewriter beep volume 0-100",
+    )
+    p.add_argument(
+        "--advance",
+        type=float,
+        metavar="PCT",
+        help="text-box advance click volume 0-100",
+    )
+    p.add_argument(
+        "--volume",
+        type=float,
+        metavar="PCT",
+        help="alias for --beep (backward compatible)",
+    )
     p.add_argument("--restore", action="store_true", help="restore originals from backup")
     p.add_argument("--game-dir", type=Path, default=None, help="TGAAC install folder")
     p.add_argument("--dry-run", action="store_true", help="do not write files")
+    p.add_argument(
+        "--show",
+        action="store_true",
+        help="print saved volumes and exit",
+    )
     return p.parse_args(argv)
 
 
-def resolve_action(args: argparse.Namespace) -> Tuple[str, Optional[float]]:
-    """Return ('restore', None) or ('volume', pct)."""
+def resolve_settings(
+    args: argparse.Namespace, current: Dict[str, float]
+) -> Tuple[str, Dict[str, float]]:
+    """Return ('restore'|'apply'|'show', settings)."""
+    if args.show:
+        return "show", current
     if args.restore:
-        return "restore", None
+        return "restore", dict(DEFAULT_SETTINGS)
+
+    updates: Dict[str, float] = {}
+    if args.beep is not None:
+        updates["beep"] = float(args.beep)
     if args.volume is not None:
-        return "volume", float(args.volume)
+        updates["beep"] = float(args.volume)
+    if args.advance is not None:
+        updates["advance"] = float(args.advance)
+
     pos = args.volume_positional
     if pos is not None:
         if str(pos).lower() in ("restore", "r", "undo"):
-            return "restore", None
+            return "restore", dict(DEFAULT_SETTINGS)
         try:
-            return "volume", float(str(pos).rstrip("%"))
+            updates["beep"] = _parse_pct(str(pos))
         except ValueError as exc:
             raise PatchError(f"invalid volume: {pos!r}") from exc
+
+    if updates:
+        settings = dict(current)
+        for key, val in updates.items():
+            if not (0.0 <= val <= 100.0):
+                raise PatchError(f"{key} volume must be between 0 and 100")
+            settings[key] = val
+        return "apply", settings
+
     # Interactive
-    val = prompt_volume()
-    if val < 0:
-        return "restore", None
-    return "volume", val
+    return prompt_settings(current)
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = parse_args(argv)
     try:
-        action, vol = resolve_action(args)
-        if action == "volume" and vol is not None and not (0.0 <= vol <= 100.0):
-            eprint("volume must be between 0 and 100")
-            return 2
-
         game = find_game_dir(args.game_dir)
         arcs = target_arcs(game)
         bdir = backup_dir_for(game)
+        current = load_settings(bdir)
+        action, settings = resolve_settings(args, current)
+
         print(f"game: {game}")
         print(f"arcs: {len(arcs)} file(s)")
+        print(
+            "volumes: "
+            + ", ".join(
+                f"{CHANNEL_LABELS[k]}={settings[k]:g}%"
+                if action != "show"
+                else f"{CHANNEL_LABELS[k]}={current[k]:g}%"
+                for k in CHANNELS
+            )
+        )
 
-        if action == "restore":
+        if action == "show":
+            return 0
+
+        if action == "restore" or all(settings[c] >= 100.0 for c in CHANNELS):
+            ensure_backups(arcs, bdir, args.dry_run)
             restore_from_backup(arcs, bdir, args.dry_run)
-            print("done (restored).")
+            save_settings(bdir, dict(DEFAULT_SETTINGS), args.dry_run)
+            print("done (restored to defaults / 100%).")
             return 0
 
-        assert vol is not None
         ensure_backups(arcs, bdir, args.dry_run)
-        if vol == 100.0 and not args.dry_run:
-            restore_from_backup(arcs, bdir, dry_run=False)
-            print("done (100% = original).")
-            return 0
-
         for arc in arcs:
             bak = bdir / f"{arc.parent.name}__{arc.name}"
             if args.dry_run and not bak.is_file():
@@ -575,8 +719,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             elif not bak.is_file():
                 raise PatchError(f"missing backup {bak}")
             print(f"patching {arc.parent.name}/{arc.name} ...")
-            patch_one_from_backup(arc, bak, vol, args.dry_run)
-        print(f"done (text beep volume = {vol:g}%).")
+            patch_one_from_backup(arc, bak, settings, args.dry_run)
+        save_settings(bdir, settings, args.dry_run)
+        print(
+            "done ("
+            + ", ".join(f"{k}={settings[k]:g}%" for k in CHANNELS)
+            + ")."
+        )
         return 0
     except PatchError as exc:
         eprint(f"error: {exc}")

@@ -1,22 +1,26 @@
 # TGAACBeepBoop
 
-Turn down (or mute) the dialogue **typewriter beep** in
+Turn down (or mute) dialogue text sounds in
 [*The Great Ace Attorney Chronicles*](https://store.steampowered.com/app/1158850)
-without muting the rest of the sound effects.
+**without** muting the rest of the sound effects.
 
-The stock game only has a global SFX slider. Deleting the loose
-`message_male.xsew` / `message_female.xsew` files does **nothing** — the game
-plays those samples from packed Capcom `.arc` archives. This patcher edits
-those archives in place.
+Two independent controls:
+
+| Option | What it changes | Samples |
+|--------|-----------------|---------|
+| **beep** | Typewriter beeps while text appears | `message_male`, `message_female` |
+| **advance** | Click when you advance the text box | `chin` |
 
 | Volume | Result |
 |--------|--------|
-| `100` | Default (original beeps) |
-| `1`–`99` | Quieter beeps |
-| `0` | Mute beeps only |
-| `restore` | Undo from backup |
+| `100` | Default (original) |
+| `1`–`99` | Quieter |
+| `0` | Mute that sound only |
+| `restore` | Undo everything from backup |
 
-Other SFX (desk slam, objection, UI clicks, etc.) are left alone.
+The stock game only has a global SFX slider. Deleting the loose `.xsew` files
+does **nothing** — the game plays these from packed Capcom `.arc` archives.
+This patcher edits those archives in place.
 
 ## Requirements
 
@@ -25,7 +29,7 @@ Other SFX (desk slam, objection, UI clicks, etc.) are left alone.
 
 ## Install
 
-1. Download a release asset below, **or** clone this repo.
+1. Download a [release](https://github.com/ImpulseMirror/TGAACBeepBoop/releases) zip, **or** clone this repo.
 2. Put the folder inside your TGAAC install (next to `TGAAC.exe`):
 
 ```text
@@ -54,14 +58,38 @@ undo the patch.
 python set-text-beep-volume.py
 ```
 
-`python3` or `py -3` also work. No arguments → interactive prompt.
+Interactive: asks for **beep** and **advance** separately (blank keeps the
+last saved value).
 
 ```bash
-python set-text-beep-volume.py 0        # mute
-python set-text-beep-volume.py 25       # quiet
-python set-text-beep-volume.py 100      # default
-python set-text-beep-volume.py restore  # undo
+# Mute both
+python set-text-beep-volume.py --beep 0 --advance 0
+
+# Quiet typewriter, mute advance click
+python set-text-beep-volume.py --beep 10 --advance 0
+
+# Only change advance click (beep stays at last saved value)
+python set-text-beep-volume.py --advance 0
+
+# Legacy: bare number still sets beep only
+python set-text-beep-volume.py 0
+
+# Restore originals
+python set-text-beep-volume.py restore
+# or
+python set-text-beep-volume.py --restore
+
+# Show saved volumes
+python set-text-beep-volume.py --show
 ```
+
+`python3` or `py -3` also work.
+
+Settings are remembered in:
+
+`nativeDX11x64/archive/.tgaac_text_beep_backup/settings.json`
+
+So changing one option does not reset the other.
 
 ### Optional OS helpers
 
@@ -76,15 +104,11 @@ everywhere Python is installed.
 
 ## Releases
 
-Each GitHub Release attaches zip downloads:
-
 | Asset | Contents |
 |-------|----------|
 | `TGAACBeepBoop-full-*.zip` | Everything (clone equivalent) |
 | `TGAACBeepBoop-windows-*.zip` | `.bat` + Python scripts + README |
 | `TGAACBeepBoop-unix-*.zip` | `.sh` + `.command` + Python scripts + README |
-
-Or clone the whole repo:
 
 ```bash
 git clone https://github.com/ImpulseMirror/TGAACBeepBoop.git
@@ -101,7 +125,7 @@ First run copies originals to:
 
 `nativeDX11x64/archive/.tgaac_text_beep_backup/`
 
-Later volume changes always re-apply from that backup (not cumulative).
+Later changes always re-apply from that backup (not cumulative).
 
 ## Sharing / legal
 
