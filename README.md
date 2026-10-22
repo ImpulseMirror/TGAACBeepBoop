@@ -9,7 +9,7 @@ Two independent controls:
 | Option | What it changes | Samples |
 |--------|-----------------|---------|
 | **beep** | Typewriter beeps while text appears | `message_male`, `message_female` |
-| **advance** | Click when you advance the text box | `chin` |
+| **advance** | Click when you advance the text box | `page` |
 
 | Volume | Result |
 |--------|--------|

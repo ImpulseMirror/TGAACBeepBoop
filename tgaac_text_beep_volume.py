@@ -7,7 +7,7 @@ Drop this folder into your TGAAC install (next to TGAAC.exe), then run:
 
 Independent controls:
   beep     — dialogue typewriter beeps (message_male / message_female)
-  advance  — text-box advance click (chin)
+  advance  — text-box advance click (page)
 
 Volumes always re-apply from a one-time backup (not cumulative).
 100% = original sample. 0% = mute.
@@ -33,7 +33,7 @@ USIZE_FLAG = 0x40000000
 # Independent volume channels → sample stem names inside snd_script_*.arc
 CHANNELS: Dict[str, Tuple[str, ...]] = {
     "beep": ("message_male", "message_female"),
-    "advance": ("chin",),
+    "advance": ("page",),
 }
 CHANNEL_LABELS = {
     "beep": "text beep (typewriter)",
