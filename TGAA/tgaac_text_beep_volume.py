@@ -2,8 +2,8 @@
 """
 TGAAC text SFX volume patcher (beep + advance click)
 
-Drop this folder into your TGAAC install (next to TGAAC.exe), then run:
-  python set-text-beep-volume.py
+Drop this repo into your TGAAC install (next to TGAAC.exe), then run:
+  python TGAA/set-text-beep-volume.py
 
 Independent controls:
   beep     — dialogue typewriter beeps (message_male / message_female)
@@ -58,6 +58,17 @@ def eprint(*args: object) -> None:
 
 def script_dir() -> Path:
     return Path(__file__).resolve().parent
+
+
+def _walk_up(start: Path, levels: int) -> List[Path]:
+    out = [start]
+    cur = start
+    for _ in range(levels):
+        if cur.parent == cur:
+            break
+        cur = cur.parent
+        out.append(cur)
+    return out
 
 
 def looks_like_tgaac(path: Path) -> bool:
@@ -345,7 +356,8 @@ def candidate_game_dirs() -> List[Path]:
         cands.append(Path(env))
 
     here = script_dir()
-    cands.extend([here, here.parent, Path.cwd(), Path.cwd().parent])
+    cands.extend(_walk_up(here, 4))
+    cands.extend(_walk_up(Path.cwd(), 4))
 
     steam_roots = [
         home / ".steam/steam/steamapps/common/TGAAC",
@@ -399,8 +411,7 @@ def find_game_dir(explicit: Optional[Path]) -> Path:
             raise PatchError(f"--game-dir does not look like TGAAC: {p}")
         return p
 
-    here = script_dir()
-    for cand in (here, here.parent):
+    for cand in _walk_up(script_dir(), 4):
         if looks_like_tgaac(cand):
             return cand.resolve()
 

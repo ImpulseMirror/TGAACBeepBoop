@@ -1,6 +1,6 @@
 #!/usr/bin/env sh
 # TGAAC text-beep volume — Linux / macOS / Git Bash
-# Drop the text-beep-patcher folder into your TGAAC install, then:
+# Run from TGAA/ inside your TGAAC install, or pass --game-dir. Then:
 #   ./set-text-beep-volume.sh          # interactive
 #   ./set-text-beep-volume.sh 0        # mute
 #   ./set-text-beep-volume.sh 25       # 25%

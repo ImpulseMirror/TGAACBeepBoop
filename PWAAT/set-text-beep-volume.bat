@@ -2,9 +2,9 @@
 setlocal EnableExtensions
 cd /d "%~dp0"
 
-rem TGAAC text-beep volume — Windows
-rem Drop the text-beep-patcher folder into your TGAAC install, then double-click
-rem this file, or run:  set-text-beep-volume.bat 0
+rem Phoenix Wright trilogy dialogue-blip volume — Windows
+rem Run from PWAAT\ inside the game install, then double-click
+rem this file, or run:  set-text-beep-volume.bat --male 0 --female 0 --typewriter 0
 
 set "SCRIPT=%~dp0set-text-beep-volume.py"
 
